@@ -1,0 +1,4 @@
+* text=auto
+# cmd.exe / Windows PowerShell は CRLF 前提 (LF だと goto のラベルを読み違えることがある)
+*.bat text eol=crlf
+*.ps1 text eol=crlf

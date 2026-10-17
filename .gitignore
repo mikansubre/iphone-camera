@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+# 自己署名証明書と秘密鍵 (起動時に PC ごとに自動生成される)
+certs/
+vcam/build/
+*.log

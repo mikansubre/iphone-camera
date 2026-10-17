@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>iPhone Camera</title>
+<style>
+  :root { color-scheme: dark; --accent: #0a84ff; --ok: #30d158; --err: #ff453a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #f2f2f7;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  #stage { flex: 1; position: relative; overflow: hidden; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  video.mirror { transform: scaleX(-1); }
+  #status { position: absolute; top: calc(env(safe-area-inset-top) + 12px); left: 50%; transform: translateX(-50%);
+    padding: 6px 14px; border-radius: 999px; background: rgba(28, 28, 30, .8); font-size: 14px; white-space: nowrap;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  #status::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 8px; background: #8e8e93; vertical-align: 1px; }
+  #status[data-kind="live"]::before { background: var(--ok); }
+  #status[data-kind="error"]::before { background: var(--err); }
+  #stats { position: absolute; left: 12px; bottom: 12px; padding: 4px 8px; border-radius: 6px;
+    background: rgba(28, 28, 30, .7); color: #d1d1d6; font: 11px/1.5 ui-monospace, Menlo, monospace;
+    white-space: pre; }
+  #stats:empty { display: none; }
+  #controls { display: flex; gap: 10px; align-items: center; padding: 14px 16px calc(env(safe-area-inset-bottom) + 14px);
+    background: #111; }
+  button, select { font: inherit; font-size: 16px; color: inherit; border: 0; border-radius: 12px; padding: 12px 14px;
+    background: #2c2c2e; }
+  #start { flex: 1; background: var(--accent); font-weight: 600; }
+  #start.live { background: var(--err); }
+  button:disabled { opacity: .5; }
+  #hint { margin: 0; padding: 0 16px 10px; background: #111; color: #8e8e93; font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <video id="preview" playsinline autoplay muted></video>
+    <div id="status">「開始」を押してください</div>
+    <div id="stats"></div>
+  </div>
+  <p id="hint">配信中は Safari を前面に表示したままにしてください</p>
+  <div id="controls">
+    <button id="flip" type="button" aria-label="カメラ切替">⟲ 背面</button>
+    <select id="res" aria-label="解像度">
+      <option value="1280x720@30">720p 30</option>
+      <option value="1280x720@60">720p 60</option>
+      <option value="1920x1080@30">1080p 30</option>
+      <option value="1920x1080@60" selected>1080p 60</option>
+    </select>
+    <button id="start" type="button">開始</button>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $("preview"), statusEl = $("status"), statsEl = $("stats"),
+  startBtn = $("start"), flipBtn = $("flip"), resSel = $("res");
+const query = new URLSearchParams(location.search);
+const token = query.get("t") || "";
+const cam = query.get("cam");  // カメラごとの QR から開いたときだけ付く
+const deviceId = loadDeviceId();
+
+let pc = null, sender = null, stream = null, wakeLock = null, statsTimer = null;
+let facing = "environment";
+let maxBitrate = 16_000_000;  // サーバーの指定で上書きされる
+let cameraName = "PC";
+
+// この iPhone を見分ける ID。再接続したとき前と同じ仮想カメラに戻してもらうために使う
+function loadDeviceId() {
+  try {
+    let id = localStorage.getItem("iphonecam-device");
+    if (!id) {
+      id = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem("iphonecam-device", id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
+}
+
+function selectedMode() {
+  const [size, fps] = resSel.value.split("@");
+  const [width, height] = size.split("x").map(Number);
+  return { width, height, fps: Number(fps) };
+}
+
+function setStatus(text, kind = "") {
+  statusEl.textContent = text;
+  statusEl.dataset.kind = kind;
+}
+
+function updateButtons() {
+  const live = pc !== null;
+  startBtn.textContent = live ? "停止" : "開始";
+  startBtn.classList.toggle("live", live);
+  flipBtn.textContent = facing === "environment" ? "⟲ 背面" : "⟲ 前面";
+}
+
+async function openCamera() {
+  // iOS は別カメラを同時に開けないので、先に今のトラックを止める
+  stream?.getTracks().forEach((t) => t.stop());
+  const { width, height, fps } = selectedMode();
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: facing },
+      width: { ideal: width },
+      height: { ideal: height },
+      frameRate: { ideal: fps },
+    },
+  });
+  video.srcObject = stream;
+  video.classList.toggle("mirror", facing === "user");
+  return stream.getVideoTracks()[0];
+}
+
+function preferH264(transceiver) {
+  // iPhone はハードウェアエンコードできる H.264 を優先
+  try {
+    const codecs = RTCRtpSender.getCapabilities("video").codecs;
+    const h264 = codecs.filter((c) => c.mimeType === "video/H264");
+    transceiver.setCodecPreferences([...h264, ...codecs.filter((c) => c.mimeType !== "video/H264")]);
+  } catch {}
+}
+
+async function applyEncoding() {
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) return;
+    params.encodings[0].maxBitrate = maxBitrate;
+    params.encodings[0].maxFramerate = selectedMode().fps;
+    params.encodings[0].scaleResolutionDownBy = 1;
+    await sender.setParameters(params);
+  } catch {}
+}
+
+let lastBytes = 0, lastTime = 0;
+async function showStats() {
+  if (!pc || !sender) return;
+  const s = stream?.getVideoTracks()[0]?.getSettings() || {};
+  let out = null;
+  (await sender.getStats()).forEach((r) => { if (r.type === "outbound-rtp") out = r; });
+  const lines = [`camera ${s.width}x${s.height} ${Math.round(s.frameRate || 0)}fps`];
+  if (out) {
+    const mbps = lastTime ? ((out.bytesSent - lastBytes) * 8) / ((out.timestamp - lastTime) * 1000) : 0;
+    lastBytes = out.bytesSent; lastTime = out.timestamp;
+    lines.push(`send   ${out.frameWidth ?? "?"}x${out.frameHeight ?? "?"} ${Math.round(out.framesPerSecond ?? 0)}fps ${mbps.toFixed(1)}Mbps`);
+    if (out.qualityLimitationReason && out.qualityLimitationReason !== "none") {
+      lines.push(`limit  ${out.qualityLimitationReason}`);
+    }
+  }
+  statsEl.textContent = lines.join("\n");
+}
+
+function iceGatheringDone(conn, timeoutMs = 3000) {
+  if (conn.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => { conn.removeEventListener("icegatheringstatechange", check); resolve(); };
+    const check = () => { if (conn.iceGatheringState === "complete") done(); };
+    conn.addEventListener("icegatheringstatechange", check);
+    setTimeout(done, timeoutMs);
+  });
+}
+
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+}
+
+function onConnectionState() {
+  if (!pc) return;
+  switch (pc.connectionState) {
+    case "connected": setStatus(`${cameraName} に配信中`, "live"); break;
+    case "disconnected": setStatus("接続が不安定です…"); break;
+    case "failed": stop(); setStatus("接続が切れました。もう一度「開始」を押してください", "error"); break;
+  }
+}
+
+async function start() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("HTTPS で開かれていないためカメラを使えません", "error");
+    return;
+  }
+  startBtn.disabled = true;
+  try {
+    setStatus("カメラを起動中…");
+    const track = await openCamera();
+
+    pc = new RTCPeerConnection();
+    pc.addEventListener("connectionstatechange", onConnectionState);
+    const transceiver = pc.addTransceiver(track, { direction: "sendonly", streams: [stream] });
+    preferH264(transceiver);
+    sender = transceiver.sender;
+    updateButtons();
+
+    setStatus("PC に接続中…");
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceGatheringDone(pc);
+    const params = new URLSearchParams({ t: token });
+    if (cam) params.set("cam", cam);
+    const res = await fetch(`/offer?${params}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type, device: deviceId }),
+    });
+    if (!res.ok) {
+      const reason = res.status === 403 ? "PC の QR コードを読み取り直してください"
+        : res.status === 404 ? "このカメラは PC 側で削除されています。QR コードを読み取り直してください"
+        : `サーバーエラー (${res.status})`;
+      throw new Error(reason);
+    }
+    const answer = await res.json();
+    if (answer.maxBitrate) maxBitrate = answer.maxBitrate;
+    if (answer.camera) cameraName = answer.camera;
+    await pc.setRemoteDescription({ type: answer.type, sdp: answer.sdp });
+    await applyEncoding();
+    lastBytes = lastTime = 0;
+    statsTimer = setInterval(showStats, 1000);
+    keepAwake();
+  } catch (e) {
+    stop();
+    setStatus(`エラー: ${e.message || e.name}`, "error");
+  } finally {
+    startBtn.disabled = false;
+  }
+}
+
+function stop() {
+  clearInterval(statsTimer);
+  statsEl.textContent = "";
+  pc?.close();
+  pc = sender = null;
+  stream?.getTracks().forEach((t) => t.stop());
+  stream = null;
+  video.srcObject = null;
+  wakeLock?.release().catch(() => {});
+  wakeLock = null;
+  setStatus("停止しました");
+  updateButtons();
+}
+
+async function restartCamera() {
+  if (!sender) return;
+  try {
+    await sender.replaceTrack(await openCamera());
+    await applyEncoding();
+  } catch (e) {
+    setStatus(`カメラ切替に失敗: ${e.message || e.name}`, "error");
+  }
+}
+
+startBtn.addEventListener("click", () => (pc ? stop() : start()));
+flipBtn.addEventListener("click", () => {
+  facing = facing === "environment" ? "user" : "environment";
+  updateButtons();
+  restartCamera();
+});
+resSel.addEventListener("change", restartCamera);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && pc && !wakeLock) keepAwake();
+});
+window.addEventListener("pagehide", () => pc?.close());
+
+if (!token) setStatus("PC の QR コードから開いてください", "error");
+updateButtons();
+</script>
+</body>
+</html>

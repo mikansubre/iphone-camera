@@ -1,0 +1,11 @@
+LIBRARY iphonecam
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE
+    DllRegisterServer PRIVATE
+    DllUnregisterServer PRIVATE
+    ICam_GetFormat
+    ICam_Create
+    ICam_Send
+    ICam_InUse
+    ICam_Remove
