@@ -440,9 +440,11 @@ class Hub:
 
     割り当て方:
       - URL に cam=N があればそのカメラ (カメラごとの QR から開いたとき)
-      - なければ、前回と同じ iPhone なら前回のカメラ。それ以外は空いているカメラ
+      - なければ、前回と同じ iPhone なら前回のカメラ。それ以外は接続の無いカメラ
         (一度も使われていないもの → 配信が終わってから長いもの の順)。空きが無ければ新しく作る。
+        映像が途切れているだけの接続はまだ閉じていないので空きに数えない (一瞬の途切れでカメラを取られないように)。
         カメラの数は「同時につないだ iPhone の最大数」まで増える
+      - 固定モード (カメラごとの QR) では cam=N の無い接続を断る
     """
 
     MODES = ("auto", "fixed")
@@ -478,13 +480,14 @@ class Hub:
             if slot is None:
                 raise web.HTTPNotFound(text="このカメラは削除されています")
             return slot
+        if self.mode == "fixed":
+            raise web.HTTPConflict(text="カメラごとの QR から開いてください")
         for slot in self.slots.values():
             if device_id and slot.device_id == device_id:
                 return slot
-        # 映像が途絶えている接続のカメラも空きとみなす (タブを閉じた iPhone など)
-        free = [s for s in self.slots.values() if s.conn is None or s.conn.silent_for > STALE_SEC]
+        free = [s for s in self.slots.values() if s.conn is None]
         if free:
-            return min(free, key=lambda s: (s.conn is not None, s.device_id is not None, s.idle_since, s.id))
+            return min(free, key=lambda s: (s.device_id is not None, s.idle_since, s.id))
         return self.add_slot()
 
     async def watchdog(self) -> None:
@@ -512,7 +515,11 @@ class Hub:
         slot.device_id = device_id or slot.device_id
         log.info("%s に %s を割り当てました", slot.name, conn.peer)
 
-        answer = await conn.accept(params)
+        try:
+            answer = await conn.accept(params)
+        except BaseException:
+            await conn.close()  # 壊れた接続がカメラを DEAD_SEC 秒ふさがないように
+            raise
         return web.json_response({
             "sdp": rtc_tuning.add_bandwidth(answer.sdp, self.max_kbps),
             "type": answer.type,

@@ -1,8 +1,10 @@
-aiohttp
-aiortc
-av
-cryptography
-numpy
-pillow
-pyvirtualcam
-qrcode[pil]
+# rtc_tuning.py が aiortc / PyAV の内部 (受信側のジッタバッファやデコーダ) を書き換えているので、版を固定している。
+# 上げるときは rtc_tuning.py が新しい版でも効いているか確かめること
+aiohttp==3.14.5
+aiortc==1.15.0
+av==17.1.0
+cryptography==50.0.2
+numpy==2.5.4
+pillow==13.0.0
+pyvirtualcam==0.15.0
+qrcode[pil]==8.2

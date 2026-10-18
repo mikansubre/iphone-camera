@@ -40,7 +40,7 @@ iPhone C (Safari) ─┘    同じ Wi-Fi           └─▶ iPhone Camera 3 ─
 |---|---|
 | PC | Windows 11 (build 22000 以降)。Windows 10 は未確認 (Windows 11 仮想カメラが使えないため、動いても OBS などで 1 台のみ) |
 | Python | 3.10 以降 (3.14 で動作確認) |
-| ビルド環境 | 複数台対応の仮想カメラ (`vcam/`) を使う場合のみ: [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/ja/downloads/) の「C++ によるデスクトップ開発」、CMake 3.24 以降、Git |
+| ビルド環境 | 複数台対応の仮想カメラ (`vcam/`) を使う場合のみ: [Visual Studio Build Tools](https://visualstudio.microsoft.com/ja/downloads/) 2022 以降の「C++ によるデスクトップ開発」、CMake 3.24 以降 (VS 2026 なら 4.2 以降)、Git |
 | iPhone | iOS 16.4 以降の Safari 推奨 (画面スリープ防止のため) |
 | ネットワーク | PC と iPhone が同じ Wi-Fi / LAN。複数台なら 5GHz 帯推奨 |
 
@@ -116,8 +116,8 @@ limit  bandwidth                ← 送信側が画質を落としている理�
 
 | モード | QR | 割り当て |
 |---|---|---|
-| **自動割り当て** (既定) | 全員共通の 1 つ | 前回と同じ iPhone → 前回のカメラ。それ以外 → 空いているカメラ (未使用のもの → 配信が終わってから長いもの の順)。空きが無ければ新しく作る |
-| **カメラごとの QR** | カメラごとに 1 つ | 読んだ QR のカメラに入る。そのカメラに別の iPhone がいれば入れ替わる。どの iPhone をどのカメラにするか決めたいとき向け |
+| **自動割り当て** (既定) | 全員共通の 1 つ | 前回と同じ iPhone → 前回のカメラ。それ以外 → 接続の無いカメラ (未使用のもの → 配信が終わってから長いもの の順)。空きが無ければ新しく作る |
+| **カメラごとの QR** | カメラごとに 1 つ | 読んだ QR のカメラに入る。そのカメラに別の iPhone がいれば入れ替わる。共通の QR (cam 指定なし) からの接続は断る。どの iPhone をどのカメラにするか決めたいとき向け |
 
 カメラの数は「同時につないだ iPhone の最大数」まで増えます。iPhone の見分けは Safari の localStorage に保存した
 端末 ID で行うため、プライベートブラウズでは毎回別の iPhone として扱われます。
@@ -216,7 +216,10 @@ aiortc の既定値はインターネット越しの汎用的な通話向けで�
 ### 接続の管理
 
 - Safari のタブを閉じても WebRTC の切断検知には数十秒かかるため、**映像の途絶**で判断します。
-  3 秒届かなければそのカメラを他の iPhone に譲れる状態にし、20 秒届かなければ接続を閉じます
+  2 秒届かなければ待機画面に切り替え、20 秒届かなければ接続を閉じてカメラを空きに戻します
+- 映像が途切れているだけで接続が閉じていないカメラは、別の iPhone に譲りません (一瞬の途切れでカメラが
+  入れ替わらないように)。その間に別の iPhone が来たら新しいカメラを作ります。同じ iPhone の再接続はすぐ元のカメラに戻ります
+- iPhone との接続の確立 (SDP の交換) に失敗したら、その接続はすぐ閉じます
 - 同じカメラに新しい接続が来たら古い接続を閉じます (ページの再読み込みや、カメラごとの QR での入れ替え)
 
 ### Windows 11 仮想カメラ (`vcam/`)
@@ -295,12 +298,12 @@ mfcam.VirtualCamera("iPhone Camera 1")             Activator ─▶ MediaSource 
 ### DLL のビルド
 
 ```bat
-cmake -S vcam -B vcam\build -G "Visual Studio 17 2022" -A x64
+cmake -S vcam -B vcam\build -A x64
 cmake --build vcam\build --config Release
 vcam\install_vcam.bat
 ```
 
-WIL は CMake の FetchContent で取得します。CRT は静的リンクなので、Frame Server 側で VC++ ランタイムは不要です。
+`-G` を付けなければ、入っている一番新しい Visual Studio でビルドします。WIL は CMake の FetchContent で取得します。CRT は静的リンクなので、Frame Server 側で VC++ ランタイムは不要です。
 DLL を作り直したら `install_vcam.bat` で入れ直してください (Frame Server を止めて古い DLL を差し替えます)。
 
 ### テストのしかた
@@ -320,3 +323,7 @@ DLL を作り直したら `install_vcam.bat` で入れ直してください (Fra
 - [pyvirtualcam](https://github.com/letmaik/pyvirtualcam) — OBS Virtual Camera などへの出力
 - [VCamSample](https://github.com/smourier/VCamSample) (MIT) — `MFCreateVirtualCamera` のメディアソース実装の参考
 - [WIL](https://github.com/microsoft/wil) — Windows Implementation Libraries
+
+## ライセンス
+
+MIT License ([LICENSE](LICENSE))。VCamSample と WIL の著作権表示も LICENSE に含めています。

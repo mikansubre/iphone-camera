@@ -208,6 +208,7 @@ async function start() {
     if (!res.ok) {
       const reason = res.status === 403 ? "PC の QR コードを読み取り直してください"
         : res.status === 404 ? "このカメラは PC 側で削除されています。QR コードを読み取り直してください"
+        : res.status === 409 ? "PC が「カメラごとの QR」になっています。使うカメラの QR コードを読み取ってください"
         : `サーバーエラー (${res.status})`;
       throw new Error(reason);
     }

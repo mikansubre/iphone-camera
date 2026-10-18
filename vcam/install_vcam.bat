@@ -4,7 +4,7 @@ cd /d "%~dp0"
 if /i "%~1"=="-Uninstall" goto :install
 if not exist build\Release\iphonecam.dll (
   echo Building iphonecam.dll ...
-  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 || goto :builderror
+  cmake -S . -B build -A x64 || goto :builderror
   cmake --build build --config Release || goto :builderror
 )
 
@@ -16,6 +16,6 @@ pause
 exit /b
 
 :builderror
-echo Build failed. Install "Visual Studio 2022 Build Tools" (Desktop development with C++) and CMake 3.24+.
+echo Build failed. Install "Visual Studio Build Tools" (2022 or later, Desktop development with C++) and a CMake 3.24+ (4.2+ for VS 2026).
 pause
 exit /b 1

@@ -95,16 +95,30 @@ bool ChannelReader::CopyLatest(BYTE* dst, LONG pitch, LONG64* seq)
 {
     if (!_header)
         return false;
-    *seq = _header->seq;
-    if (*seq == 0)
-        return false;
-
-    MemoryBarrier();
-    const BYTE* src = SlotPtr(_view.get(), _header, _header->latest);
     const UINT32 w = _header->width, h = _header->height;
-    for (UINT32 y = 0; y < h + h / 2; y++)  // Y 面と UV 面は同じ行間隔で連続している
-        memcpy(dst + static_cast<size_t>(y) * pitch, src + static_cast<size_t>(y) * w, w);
-    return true;
+
+    // seqlock: Writer は最新の次のスロットへ書くので、コピー中のスロットが上書きされるのは、
+    // コピーの間に seq が kChannelSlots - 1 以上進んだときだけ。そうなっていたら読み直す
+    for (int attempt = 0;; attempt++)
+    {
+        const LONG64 before = _header->seq;
+        if (before == 0)
+            return false;
+        MemoryBarrier();
+        const BYTE* src = SlotPtr(_view.get(), _header, _header->latest);
+        for (UINT32 y = 0; y < h + h / 2; y++)  // Y 面と UV 面は同じ行間隔で連続している
+            memcpy(dst + static_cast<size_t>(y) * pitch, src + static_cast<size_t>(y) * w, w);
+        MemoryBarrier();
+        *seq = before;
+        if (_header->seq - before < static_cast<LONG64>(kChannelSlots) - 1)
+            return true;
+        if (attempt == 3)
+        {
+            // 黒を出すよりは、崩れているかもしれない 1 枚を出すほうがまし
+            Log(L"CopyLatest: writer kept overtaking the reader");
+            return true;
+        }
+    }
 }
 
 void ChannelReader::Heartbeat()
